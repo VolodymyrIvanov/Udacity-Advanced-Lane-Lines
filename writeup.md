@@ -37,6 +37,8 @@ To demonstrate this step, I will describe how I apply the distortion correction 
 
 I used a combination of color and gradient thresholds to generate a binary image (thresholding steps in a function `pipeline()` in cell #7. For color channel I used S-channel of HLS color space.  Here's an example of my output for this step.
 
+After first submit and recommendations from reviewer I've added also gray-scalling channel and magnitude and direction gradient. 
+
 ![Original Image](test_images/straight_lines1.jpg)![Corrected Image](output_images/straight_lines1_p.jpg)
 
 #### 3. Descrition of performing a perspective transform and an example of a transformed image.
@@ -77,19 +79,12 @@ I verified that my perspective transform was working as expected by drawing the 
 
 #### 4. Description of identifying lane-line pixels
 
-First I identified a region of interest by defining half-lane width from car position (image center) to the left and right:
+First I identified a region of interest by defining some extents from the left and right borders of image:
 ```python
-    ysize = binary_warped.shape[0]
-    xsize = binary_warped.shape[1]
-    px_to_cm = xsize / xsize_in_centimeters
-    #Half-lane width from car
-    left_ext = left_line.line_base_pos * px_to_cm
-    right_ext = right_line.line_base_pos * px_to_cm
-    #Define maximal extensions to detect lane markings
-    left_bottom = [xsize / 2 - left_ext, ysize]
-    right_bottom = [xsize / 2 + right_ext, ysize]
-    left_top = [xsize / 2 - left_ext, 0]
-    right_top = [xsize / 2 + right_ext, 0]
+    left_bottom = [200, ysize]
+    right_bottom = [xsize - 200, ysize]
+    left_top = [200, 0]
+    right_top = [xsize - 200, 0]
     vertices = np.array([[(left_bottom[0], left_bottom[1]), 
                           (left_top[0], left_top[1]), 
                           (right_top[0], right_top[1]),
@@ -99,20 +94,19 @@ First I identified a region of interest by defining half-lane width from car pos
 ```
 
 then I found the maximums of non zero pixels on left and right sides (for left/right lanes).
-Specifying a minimal number of pixels I tried to find this number of non zero pixels in each area, if it is unsuccessful, I decreased a minimal number and tried again until this number is positive. If I didn't find any minimal set of pixels I skipped those image/frame.
+If previous frame was successful I used stored values to define start positions.
+Specifying a minimal number of pixels I tried to find this number of non zero pixels in each area, if it is unsuccessful, I dropped out stored values and start from scratch (histogramm). If I didn't find any minimal set of pixels I skipped those image/frame.
 
 Then I fit my lane lines with a 2nd order polynomial kinda like this:
-
+(in first submit there was one exception case with bad results, now everything is OK)
 ![Image with line](output_images/straight_lines1_l.jpg)
 ![Image with line](output_images/straight_lines2_l.jpg)
 ![Image with line](output_images/test1_l.jpg)
 ![Image with line](output_images/test2_l.jpg)
 ![Image with line](output_images/test3_l.jpg)
 ![Image with line](output_images/test4_l.jpg)
-![Image with line](output_images/test6_l.jpg)
-
-Here is a result of not good founded lines:
 ![Image with line](output_images/test5_l.jpg)
+![Image with line](output_images/test6_l.jpg)
 
 #### 5. Description of curvature calculation.
 
@@ -121,7 +115,17 @@ Knowing, that curve is a polynom of order 2:
 I used following formula to evaluate a curvature radius:
 ![Polynom](output_images/curv_radius_formula.gif)
 
-I did this in function `get_max_curvature_radius()` and evaluate maximal radius for all points of curve.
+I did this in followinf lines and evaluate radius for the most bottom point of curve.
+```python
+    #Evaluate radiuses of curvature
+    y_eval = np.max(ploty)
+    # Fit new polynomials to x,y in world space
+    left_fit_cr = np.polyfit(left_y*ym_per_pix, left_x*xm_per_pix, 2)
+    right_fit_cr = np.polyfit(right_y*ym_per_pix, right_x*xm_per_pix, 2)
+    # Calculate the new radii of curvature
+    left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
+    right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
+```
 Then I checked difference in curve directions by evaluating differences between a-coefficients of polynoms, maximal distance between two curves and special use cases if curves are curved enough and did not directed into different directions (like on image above). 
 If these conditions are reached I skipped results of this frame and use previous ones, stored in class `Line`.
 For first frame if no previouc results are available I did filtering of curve parts from bottom side of image until the distance between curves is more than minimal configured value:
@@ -155,8 +159,21 @@ I implemented this step in following lines in the function `process_frame()`.
         pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
         pts = np.hstack((pts_left, pts_right))
      
+        #Define average curve radius
+        curverad = np.average([left_curverad, right_curverad])
+        #Define position by getting average between last elements of array (most bottom position)
+        left_pos = left_fitx[-1]
+        right_pos = right_fitx[-1]
+        vehicle_pos = np.average([left_pos, right_pos]) 
+        if (vehicle_pos < xsize / 2):
+            pos_text = 'left of center'
+        else:
+            pos_text = 'right of center'
+        pos_text = 'Vehicle is ' + "{:.2f}".format(vehicle_pos * xm_per_pix) + 'm ' + pos_text
         # Draw the lane onto t  he warped blank image
         cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+        cv2.putText(undist, 'Radius of curvature = ' + "{:.2f}".format(curverad) + ' (m)', bottomLeftCornerOfText1, font, fontScale, fontColor, 2)
+        cv2.putText(undist, pos_text, bottomLeftCornerOfText2, font, fontScale, fontColor, 2)
      
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     newwarp = cv2.warpPerspective(color_warp, Minv, (image.shape[1], image.shape[0])) 
@@ -185,4 +202,9 @@ I used some snippets of code from Lesson directly, without tunning parameters or
 1. First possibility to improve results of challenge videos is to tune thresholds or/and parameters I used in code such a minimal distance, differences in directions, maximal radius of curvature, etc.
 
 2. Another possibility is trying iteractivly to use another channels (except S-channel) to choose the best result. Especially for hard-challenge video, where hardrail divider or curb were detected instead of lane marking.
+
+Update after first submit:
+1. I changed pipeline process of images by adding gray scale channel threshold and magnitude and direction gradient.
+2. I added text output of evaluated curvature radius and car position
+3. I did some other minor changes in code to improve results
   
